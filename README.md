@@ -250,27 +250,205 @@ For conducting the classification, we defined a list containing the best model a
 ```python
 #Provide the list for the pool classifiers
 pool_clf = [best_xgb,  best_ert, best_hgb, best_mlp]
-des_result = []
 #K-Nearest Oracles-Eliminate
 knorae = KNORAE(pool_classifiers=pool_clf, k=15, DFP=True, voting='soft', DSEL_perc = 0.1)
 knorae.fit(x_dsel, y_dsel)
-y_pred_e = knorae.predict(x_test)
-y_prob_e = knorae.predict_proba(x_test)
-des_result.append({
-    'Classifier': 'KNORA-E',
-    'Accuracy': accuracy_score(y_test, y_pred_e),
-    'F1-Score': f1_score(y_test, y_pred_e, average='weighted'),
-    })
 #METADES
 metades = METADES(pool_classifiers=pool_clf, k=7, DFP=True, voting='soft', Hc=0.5, DSEL_perc = 0.1)
 metades.fit(x_dsel, y_dsel)
-y_pred_des = metades.predict(x_test)
-y_prob_des = metades.predict_proba(x_test)
-des_result.append({
-    'Classifier': 'METADES',
-    'Accuracy': accuracy_score(y_test, y_pred_des),
-    'F1-Score': f1_score(y_test, y_pred_des, average='weighted'),
-    })
-des_result_df = pd.DataFrame(des_result)
-print(des_result_df)
 ```
+## 6. Model Evaluation
+Since my dataset contain imbalance data, we used several metrics for more comprehensive evaluation. The overall accuracy, F1-score, Geometric Mean, and Cross Entropy Loss will be calculated for the model, while taking account the class weight. The f1 score is the harmonic mean of precision and recall, and can be calculated using their average class value (Haibo He & Garcia, 2009). For G-mean, sensitivity and specificity are equal to true positive and true negative rates, respectively. In multiclass context, the G-mean can be calculated using average class value (Douzas et al., 2019).
+<br>
+
+$$F_1 = 2 \frac{Precision \times Recall}{Precision + Recall}$$
+
+$$Gmean = \sqrt{Sensitivity \times Specificity}$$
+
+$$\mathcal{L} = -\frac{1}{N} \sum_{i=1}^{n} \sum_{j=1}^{C} w_j \times y_{ij} \times \log(\hat{p}_{ij})$$
+
+The CE Loss equation is shown in equation 5, in which this metric measure the dissimilarity between actual distribution and predicted probabilities (Yeung et al., 2022). The metric is computed by summing the negative logarithm of the predicted probabilities for the true classes log{{(p}_{ij})}, weighted by the refence class label (yij) and class weights (wj). The loss is then averaged over all samples. Intuitively, this metric penalizes predictions that assign low probabilities to the true classes, encouraging the model to output probabilities that closely align with the actual labels. Below are the implementation of model evaluation based on these metrics:
+
+```python
+from sklearn.utils.class_weight import compute_class_weight
+# Classifiers and corresponding transformed test data
+classifiers = {
+    'KNORA-E': {'model': knorae, 'x_train': x_dsel, 'x_test': x_test},
+    'METADES': {'model': metades, 'x_train': x_dsel, 'x_test': x_test},
+}
+
+# Store results
+individual_accuracies = []
+
+# Calculate class weights and evaluate classifiers
+for name, clf_data in classifiers.items():
+    clf = clf_data['model']
+    x_train = clf_data['x_train']
+    x_test = clf_data['x_test']
+
+    # Calculate class weights based on RFECV-reduced training data
+    unique_classes = np.unique(y_dsel)  # Assuming y_train is the same for all classifiers
+    weights = compute_class_weight(
+        class_weight='balanced',
+        classes=unique_classes,
+        y=y_dsel
+    )
+    class_weight_dict = dict(zip(unique_classes, weights))
+
+    # Predict using the current classifier
+    y_pred = clf.predict(x_test)
+    y_pred_proba = clf.predict_proba(x_test)
+
+    # Calculate metrics
+    acc = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred, average='weighted', sample_weight=[class_weight_dict[cls] for cls in y_test])
+    w_logloss = log_loss(y_test, y_pred_proba, sample_weight=[class_weight_dict[cls] for cls in y_test])
+    gmean = geometric_mean_score(y_test, y_pred, average='weighted', sample_weight=[class_weight_dict[cls] for cls in y_test])
+
+    # Append results
+    individual_accuracies.append((name, acc, f1, w_logloss, gmean))
+    print(f'Accuracy of {name}: {acc:.4f}')
+    print(f'F1 Score of {name}: {f1:.4f}')
+    print(f'Log loss of {name}: {w_logloss:.4f}')
+    print(f'Geometric Mean of {name}: {gmean:.4f}')
+
+# Identify the worst-performing classifier
+worst_classifier = min(individual_accuracies, key=lambda x: x[1])
+print(f'\nWorst-performing classifier: {worst_classifier[0]} with accuracy: {worst_classifier[1]:.4f}')
+print(f'F1 Score of worst-performing classifier: {worst_classifier[2]:.4f}')
+
+# Convert results to DataFrame for easier visualization
+columns = ['Classifier', 'Overall Accuracy', 'F1 Score', 'Log Loss', 'Geometric Mean']
+result_df = pd.DataFrame(individual_accuracies, columns=columns)
+print(result_df)
+# Save the DataFrame
+#result_df.to_csv('C:/Master of Remote Sensing/Python Code/HyperparameterTune_L9/DES_accuracy.csv', index=True)
+
+```
+## 7. Applied the model for the Classification
+If the accuracy of each classifiers is sufficient, we can applied the model to conduct the classification for the whole dataset.
+```python
+import rasterio
+from rasterio.transform import from_origin
+#The classification funtion
+def classify_raster(raster, model):
+    # Reshape raster data into (pixels, bands)
+    raster_data = raster.read().reshape((raster.count, -1)).T  # (pixels, bands)
+    
+    # Handle any invalid or missing data in the raster (e.g., NaN values)
+    mask = np.isnan(raster_data).any(axis=1)  # Identify invalid pixels
+    classified = np.full(raster_data.shape[0], -1, dtype=int)  # Initialize with a NoData value
+    
+    # Perform classification on valid pixels only
+    classified[~mask] = model.predict(raster_data[~mask])
+    
+    # Reshape back to raster dimensions
+    return classified.reshape((raster.height, raster.width))
+def export_classified_map(classified_map, reference_raster, output_path, nodata_value=-1):
+    # Copy metadata from reference raster
+    meta = reference_raster.meta.copy()
+    
+    # Update metadata for classification output
+    meta.update({
+        "driver": "GTiff",
+        "dtype": "int32",
+        "count": 1,  # Single band
+        "nodata": nodata_value,  # Define NoData value
+        "compress": "lzw"
+    })
+    
+    # Export the classified raster
+    with rasterio.open(output_path, 'w', **meta) as dst:
+        dst.write(classified_map.astype('int32'), 1)
+```
+
+## 8. Visualize the result
+Aside from visualizing the result using GIS software, we could visualized the result using matplotlib, here are the example implementation:
+```python
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import matplotlib.font_manager as fm
+from matplotlib.offsetbox import AnchoredText
+# 1. Define legend and colors for classes
+legend_21 = ['Settlement Build-up', 'Non-settlement Build-up', 'Volcanic Rock and Sand', 'Lowland Forest', 
+             'Upland Forest', 'Mangrove Forest', 'Marine Sand', 'Herbs and Grassland', 'Production Forest', 
+             'Aquaculture', 'Dryland Agriculture', 'Natural Fallow Land', 'Man-made Fallow Land', 'Rubber and Other Hardwood Plantation',
+             'Ocean Waters','Oil Palm Plantatation','Tea Plantation', 'Bushes and Shrubs', 'Rivers', 'Wetland Agriculture',
+             'Natural/Semi Natural Freshwaterbody']
+
+legend_colors = ['#FF0000', '#e97421', '#7b3531', '#2e8b57', '#228b22', '#7fffd4', '#fdd9b5', 
+                 '#c1e1c1', '#9acd32', '#ccccff', '#f5ff00', '#b5a642', '#cc8899', '#32cd32', 
+                  '#1f52dc', '#808000', '#98d97d','#008080', '#87ceeb', '#afb325', '#0f3c5e']
+#2. define the Original Raster data, and LULC data
+rasters = {
+    'Landsat 9': r'C:\Master of Remote Sensing\Python Code\Github_Repo_TassCap_Project\Data Source\Landsat9_Final_Addtwi.tif',
+    'KNORA-E':   r"C:/Master of Remote Sensing/Python Code/EL_Research/NewOutput/New_KNORA-E.tif",
+    'METADES': r"C:/Master of Remote Sensing/Python Code/EL_Research/NewOutput/New_METADES.tif"
+}
+
+cmap  = ListedColormap(legend_colors, name="lulc21") # Build a discrete Colormap from the predefined hex color code
+bounds = np.arange(len(legend_colors)+1) - 0.5       #Bound the pixel values, with no gradient or shades
+norm   = BoundaryNorm(bounds, cmap.N) #Asigning one color one id
+
+# 3.  Creating Layout Plot
+mpl.rcParams.update({
+    'font.family'     : 'Times New Roman',
+})
+n_maps = len(rasters) #Images that will be plot
+n_rows = 1  #number of row 
+n_cols = int(np.ceil(n_maps / n_rows)) # minimum cols to fit everything
+
+fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 5*n_rows), #Canvas size in inches
+                         sharex=True, sharey=True)
+axes = axes.ravel() #Flatten the 2D Numpy Array for easier looping
+# 4.  Create a loop through each raster
+for ax, (title, path) in zip(axes, rasters.items()):
+    with rasterio.open(path) as src:
+        if src.count > 1 and title.startswith("Landsat"):   # multiband FCC
+            # --- READ BANDS 5,4,3 (1‑based) ---
+            nir  = src.read(5).astype("float32")
+            red  = src.read(4).astype("float32")
+            green= src.read(3).astype("float32")
+            rgb  = np.stack([nir, red, green], axis=-1)
+
+            # --- SIMPLE PERCENTILE STRETCH (2‑98%) ---
+            p2, p98 = np.percentile(rgb[~np.isnan(rgb)], (2, 98))
+            rgb = np.clip((rgb - p2) / (p98 - p2), 0, 1)
+
+            ax.imshow(rgb)
+        else:                                              # categorical LULC
+            data = src.read(1)
+            nodata_vals = {src.nodata, -1}
+            nodata_vals = {v for v in nodata_vals if v is not None}
+            mask = np.isin(data, list(nodata_vals))
+            data = np.where(mask, np.nan, data)
+            ax.imshow(data, cmap=cmap, norm=norm, interpolation="nearest")
+
+    ax.set_title(title,fontsize=16, fontweight= 'bold')
+    ax.axis('off')
+
+# hide any empty subplot (there will be one in a 2×3 grid)
+for extra_ax in axes[n_maps:]:
+    extra_ax.axis('off')
+
+# 5.  Adding Legend for LULC Map
+handles = [mpatches.Patch(color=c, label=lab)
+           for lab, c in zip(legend_21, legend_colors)]
+
+fig.legend(
+    handles=handles,
+    loc='center left', bbox_to_anchor=(0.97, 0.5),
+    ncol=1,
+    fontsize=13,
+    frameon=False,
+    handlelength=1.5,
+    handleheight=1
+)
+plt.tight_layout(pad=1)
+plt.show()
+```
+![image](https://github.com/user-attachments/assets/3e683352-4db4-4320-bf0b-51d7d233253b)
