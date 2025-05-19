@@ -14,5 +14,6 @@ The approach for this implementation, is similar to general machine learning wor
 <p align="center">
   <img src="DES_workflow.svg" width="400" alt="DES Workflow">
 </p>
-##Implementation for Land Cover Land Use Classification
-[![Open In NBViewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](https://nbviewer.jupyter.org/github/yourusername/yourrepo/blob/main/your_notebook.ipynb#section-name)
+## Implementation for Land Use Land Cover
+
+[![Open In NBViewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](KNORAU.ipynb)
