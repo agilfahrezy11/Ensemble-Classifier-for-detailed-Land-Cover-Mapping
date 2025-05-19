@@ -14,6 +14,21 @@ The approach for this implementation, is similar to general machine learning wor
 <p align="center">
   <img src="DES_workflow.svg" width="400" alt="DES Workflow">
 </p>
-## Implementation for Land Use Land Cover
+## Implementation for Land Use Land Cover Classification
 
+below are the step by step guide for conducting DES implementation using DESLIB library, and jupyter notebook approach:
+<br>
 [![Open In NBViewer](https://raw.githubusercontent.com/jupyter/design/master/logos/Badges/nbviewer_badge.svg)](KNORAU.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/yourusername/yourrepo/main?filepath=KNORAU.ipynb)
+
+### Key Code Sections from the Notebook
+
+#### 1. Importing Raster Data
+```python
+#importing the raster data
+raster_file = 'path/to/Landsat_Combine_Param_final.dat'
+dataset = rasterio.open(raster_file)
+
+# Inspect raster structure
+L9_NS = dataset.read().transpose(1, 2, 0)  # Convert to (rows, cols, bands)
+print(f"Raster shape: {L9_NS.shape}")  # Output: (1811, 1325, 21)
