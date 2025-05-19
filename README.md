@@ -162,3 +162,115 @@ The pixel distribution based on this split are shown in the table below
 - Pool Classifiers Training: 12,133  
 - DES Training: 5,201  
 - Testing: 4,334  
+
+## 4. Parameter Optimization
+The success of machine learning algorithms often lied upon the utilization of several user defined parameters which needed to be optimized (or tuned) for a particular objective (Ramezan, 2022). In addition, tuning were crucial for bias reduction of a model predictive power, which tends to increase the model’s accuracy (Schratz et al., 2019). Various approach for parameter optimization has been proposed, ranging from grid search, randomized search, Bayesian optimization, and gradient optimization. The grid search approach is one of the widely used hyperparameter optimization technique (Perera et al., 2024). 
+<br>
+For the dynamic classifiers, the tuning process will be conducted for the base/pool classifiers, since optimization of the base classifier is crucial for the success of DES approach. In addition, the dynamic classifiers itself cannot implement a random grid search optimization as other ensemble classifier (Cruz et al., 2020). The pool classifiers could be homogenous or heterogenous, in both case diversity is expected (Britto et al., 2014). Therefore, for the pool classifiers, we used, Extremely Randomized Trees (ERT), Multilayer Perceptron (MLP), Extreme Gradient Boosting (XGB), and Histogram Gradient Boosting (HGBM) as the base classifiers for the DES framework. In addition to boosting and bagging, the introduction of neural network promote diversity in the pool classifiers. The diverse pool could improve the selection process, since different classifiers can made different mistake, which is beneficial in DES framework.
+
+Below are the parameter grid i used for each pool classifiers used for DES classification. You could modified them according to your need
+```python
+#MLP Parameter Grid
+mlp_param_grid = {
+    'hidden_layer_sizes': [(128, 64), (256, 128), (512, 256, 128)],
+    'activation': ['tanh', 'relu'],
+    'learning_rate': ['constant', 'adaptive'],
+    'max_iter': [500, 1000, 1500, 2000],
+    'learning_rate_init': [0.0001, 0.0005, 0.001, 0.01]
+}
+mlp_model = MLPClassifier(solver='adam', early_stopping = True, random_state=42)
+ERT_param = {
+    'n_estimators' : [300, 500, 700, 900, 1100],
+    'max_depth': [None, 5, 10, 20],
+    'min_samples_split': [2, 5, 7, 10],
+    'min_samples_leaf': [1, 2, 4],
+    'max_features': ['sqrt', 'log2', None],
+    'bootstrap': [True, False]
+}
+init_ET = ExtraTreesClassifier(random_state=42)
+# Define the parameter grid for randomized search
+xgb_param_grid = {
+    'n_estimators': [500, 700, 900, 1100],
+    'max_depth': [3, 6, 15, 20],
+    'min_child_weight': [1, 3, 9, 13],
+    'learning_rate': [0.001, 0.01, 0.1, 0.2],
+    'subsample': [0.1, 0.5, 1.0],
+    'colsample_bytree': [0.1, 0.5, 1.0]    
+}
+xgb_model = XGBClassifier(objective='multi:softprob', num_class = 21, eval_metric = 'mlogloss', random_state=42)
+hgbm_param = {
+    'learning_rate': [0.0001, 0.01, 0.1, 0.05, 0.2],
+    'max_iter': [500, 700, 1000, 1500],  
+    'max_depth': [None, 3, 9, 12, 15, 20],  
+    'min_samples_leaf': [5, 10, 15, 20], 
+    'max_bins': [32, 64, 255]
+}
+hgbm = HistGradientBoostingClassifier(random_state=42)
+#List for storing the result
+
+# Initialize a list to store results
+results = []
+import time
+```
+After finding the optimal parameters for each pool classifiers, we're going to explored some parameters in DES classiifers. As far as i know, GridSearchCV or RandomizedSearchCV are not compatible with Deslib library. This could change in the future, but for this part, we are going to utilized manual cross validation for finding optimal parameters. You could visit [DESlib documentation](https://deslib.readthedocs.io/en/latest/) for further reading regarding the parameter. There are several parameters for KNORA-E and METADES, for this example we are going to focus on two parameters
+     <br>
+     a. Number of k in k-Nearest Neighbors <br>
+     The k refers to initial size of the region of competence used to estimate each classifier’s local accuracy. You could refer to this [article](https://doi.org/10.1016/j.patcog.2007.10.015) for further reading <br>
+     b. Dynamic Frienemy Pruning (DFP) <br>
+     If True, base classifiers that make identical predictions for every sample in the RoC are pruned before selection. You could refer to this [article](https://doi.org/10.1016/j.patcog.2017.06.030) for further reading <br>
+
+Below are the python code for implementing manual cross validation for tuning the number of k
+```python
+#Function for Evaluating the number of k-neighbor in KNORAU
+def get_models():
+	models = dict()
+	for n in range(2,22):
+		models[str(n)] = KNORAE(k=n, DFP=True, voting='soft')
+	return models
+ 
+# evaluate a give model using cross-validation
+def evaluate_model(model):
+	cv = RepeatedStratifiedKFold(n_splits=10, n_repeats=3, random_state=1)
+	scores = cross_val_score(model, x_dsel, y_dsel, scoring='accuracy', cv=cv, n_jobs=-1)
+	return scores
+models = get_models()
+# evaluate the models and store results
+results, names = list(), list()
+for name, model in models.items():
+	scores = evaluate_model(model)
+	results.append(scores)
+	names.append(name)
+	print('>%s %.3f (%.3f)' % (name, mean(scores), std(scores)))
+# plot model performance for comparison
+plt.boxplot(results, labels=names, showmeans=True)
+plt.show()
+```
+## 5. Implementing the Classification
+For conducting the classification, we defined a list containing the best model acquired from parameter optimization. Then we fit the DES classifiers using the un-used partioned training data (x_dsel, y_dsel)
+```python
+#Provide the list for the pool classifiers
+pool_clf = [best_xgb,  best_ert, best_hgb, best_mlp]
+des_result = []
+#K-Nearest Oracles-Eliminate
+knorae = KNORAE(pool_classifiers=pool_clf, k=15, DFP=True, voting='soft', DSEL_perc = 0.1)
+knorae.fit(x_dsel, y_dsel)
+y_pred_e = knorae.predict(x_test)
+y_prob_e = knorae.predict_proba(x_test)
+des_result.append({
+    'Classifier': 'KNORA-E',
+    'Accuracy': accuracy_score(y_test, y_pred_e),
+    'F1-Score': f1_score(y_test, y_pred_e, average='weighted'),
+    })
+#METADES
+metades = METADES(pool_classifiers=pool_clf, k=7, DFP=True, voting='soft', Hc=0.5, DSEL_perc = 0.1)
+metades.fit(x_dsel, y_dsel)
+y_pred_des = metades.predict(x_test)
+y_prob_des = metades.predict_proba(x_test)
+des_result.append({
+    'Classifier': 'METADES',
+    'Accuracy': accuracy_score(y_test, y_pred_des),
+    'F1-Score': f1_score(y_test, y_pred_des, average='weighted'),
+    })
+des_result_df = pd.DataFrame(des_result)
+print(des_result_df)
+```
