@@ -365,7 +365,6 @@ def export_classified_map(classified_map, reference_raster, output_path, nodata_
 ## 8. Visualize the result
 Aside from visualizing the result using GIS software, we could visualized the result using matplotlib, here are the example implementation:
 ```python
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
@@ -395,7 +394,7 @@ bounds = np.arange(len(legend_colors)+1) - 0.5       #Bound the pixel values, wi
 norm   = BoundaryNorm(bounds, cmap.N) #Asigning one color one id
 
 # 3.  Creating Layout Plot
-mpl.rcParams.update({
+plt.rcParams.update({
     'font.family'     : 'Times New Roman',
 })
 n_maps = len(rasters) #Images that will be plot
