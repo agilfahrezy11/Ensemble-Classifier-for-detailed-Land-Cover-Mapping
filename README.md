@@ -452,3 +452,63 @@ plt.tight_layout(pad=1)
 plt.show()
 ```
 ![image](https://github.com/user-attachments/assets/3e683352-4db4-4320-bf0b-51d7d233253b)
+
+# Model evaluation and maps accuracy assessment
+## Model Evaluation
+In this section i am going to evaluate the DES classifiers and compared them with other ensemble classifiers, namely XGBoost, Catboost, and Extremely Randomized Trees (ERT). For model evaluation, my primariy metrics is weighted cross entropy loss since i am dealing with imbalance data due to the detailed nature of the classification. Additionally, Farhadpour et al (2024) suggest that cross entropy loss provide a robust evaluation metrics compared to proportion of correct metrics, such as Overall Accuracy, F1-score, etc. Below are example function for calculating cross entropy loss metric and other metrics which are robust to imbalance dataset. Please check these articles for further reading regading these metrics: [Douzas et al 2019](https://doi.org/10.3390/rs11243040), [Farhadpour et al 2024](https://doi.org/10.3390/rs16030533)
+
+```python
+from sklearn.utils.class_weight import compute_class_weight
+# Classifiers and corresponding transformed test data
+classifiers = {
+    'KNORA-E': {'model': knorae, 'x_train': x_dsel, 'x_test': x_test},
+    'METADES': {'model': metades, 'x_train': x_dsel, 'x_test': x_test},
+}
+
+# Store results
+individual_accuracies = []
+
+# Calculate class weights and evaluate classifiers
+for name, clf_data in classifiers.items():
+    clf = clf_data['model']
+    x_train = clf_data['x_train']
+    x_test = clf_data['x_test']
+
+    # Calculate class weights based on RFECV-reduced training data
+    unique_classes = np.unique(y_dsel)  # Assuming y_train is the same for all classifiers
+    weights = compute_class_weight(
+        class_weight='balanced',
+        classes=unique_classes,
+        y=y_dsel
+    )
+    class_weight_dict = dict(zip(unique_classes, weights))
+
+    # Predict using the current classifier
+    y_pred = clf.predict(x_test)
+    y_pred_proba = clf.predict_proba(x_test)
+
+    # Calculate metrics
+    acc = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred, average='weighted', sample_weight=[class_weight_dict[cls] for cls in y_test])
+    w_logloss = log_loss(y_test, y_pred_proba, sample_weight=[class_weight_dict[cls] for cls in y_test])
+    gmean = geometric_mean_score(y_test, y_pred, average='weighted', sample_weight=[class_weight_dict[cls] for cls in y_test])
+
+    # Append results
+    individual_accuracies.append((name, acc, f1, w_logloss, gmean))
+    print(f'Accuracy of {name}: {acc:.4f}')
+    print(f'F1 Score of {name}: {f1:.4f}')
+    print(f'Log loss of {name}: {w_logloss:.4f}')
+    print(f'Geometric Mean of {name}: {gmean:.4f}')
+
+# Identify the worst-performing classifier
+worst_classifier = min(individual_accuracies, key=lambda x: x[1])
+print(f'\nWorst-performing classifier: {worst_classifier[0]} with accuracy: {worst_classifier[1]:.4f}')
+print(f'F1 Score of worst-performing classifier: {worst_classifier[2]:.4f}')
+
+# Convert results to DataFrame for easier visualization
+columns = ['Classifier', 'Overall Accuracy', 'F1 Score', 'Log Loss', 'Geometric Mean']
+result_df = pd.DataFrame(individual_accuracies, columns=columns)
+print(result_df)
+# Save the DataFrame
+#result_df.to_csv('C:/Master of Remote Sensing/Python Code/HyperparameterTune_L9/DES_accuracy.csv', index=True)
+```
